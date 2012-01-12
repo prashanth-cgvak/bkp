@@ -1,0 +1,13 @@
+; $Id: uc_gift_order.info,v 1.2 2009/05/19 17:14:22 jrust Exp $
+name = UC Gift Order
+description = Adds a checkout pane that lets customers mark an order as a gift at checkout.
+dependencies[] = uc_cart
+package = Ubercart - extra
+core = 6.x
+
+; Information added by drupal.org packaging script on 2010-12-11
+version = "6.x-1.3"
+core = "6.x"
+project = "uc_gift_order"
+datestamp = "1292041540"
+

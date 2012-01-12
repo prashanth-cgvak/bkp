@@ -1,0 +1,12 @@
+#uc_gc_manage td.remaining_value {
+  font-weight: bold;
+}
+
+#uc_gc_manage td.date,
+#uc_gc_manage td.actions {
+  white-space: nowrap;
+}
+
+#uc_gc_manage td.actions a {
+  padding-right: 5px;
+}

@@ -1,0 +1,13 @@
+; $Id: uc_vat.info,v 1.1 2009/05/28 18:10:12 longwave Exp $
+name = VAT
+description = Support European VAT pricing in Ubercart.
+dependencies[] = uc_taxes
+package = "Ubercart - extra"
+core = 6.x
+
+; Information added by drupal.org packaging script on 2010-12-29
+version = "6.x-1.2"
+core = "6.x"
+project = "uc_vat"
+datestamp = "1293643009"
+

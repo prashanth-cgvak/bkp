@@ -1,0 +1,214 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>BKP Jewels</title>
+<link href="css/bkp.css" rel="stylesheet" type="text/css" />
+
+
+<link rel="stylesheet" media="screen" href="css/superfish.css" /> 
+<script type="text/javascript" src="scripts/jquery-1.2.6.min.js"></script>
+<script type="text/javascript" src="scripts/hoverIntent.js"></script>
+<script type="text/javascript" src="scripts/superfish.js"></script>
+<script type="text/javascript">
+
+		// initialise plugins
+		jQuery(function(){
+			jQuery('ul.sf-menu').superfish();
+		});
+
+</script>
+
+<!-- Home page Slider Script-->
+<link href="css/slider.css" rel="stylesheet" type="text/css" />
+
+<script type="text/javascript">
+
+function slideSwitch() {
+    var $active = $('#slideshow IMG.active');
+
+    if ( $active.length == 0 ) $active = $('#slideshow IMG:last');
+
+    // use this to pull the images in the order they appear in the markup
+    var $next =  $active.next().length ? $active.next()
+        : $('#slideshow IMG:first');
+
+    // uncomment the 3 lines below to pull the images in random order
+    
+    // var $sibs  = $active.siblings();
+    // var rndNum = Math.floor(Math.random() * $sibs.length );
+    // var $next  = $( $sibs[ rndNum ] );
+
+
+    $active.addClass('last-active');
+
+    $next.css({opacity: 0.0})
+        .addClass('active')
+        .animate({opacity: 1.0}, 1000, function() {
+            $active.removeClass('active last-active');
+        });
+}
+
+$(function() {
+    setInterval( "slideSwitch()", 5000 );
+});
+
+</script>
+
+
+<!--End  Home page Slider Script-->
+
+
+
+</head>
+
+<body>
+<div id="wrapper">
+<!--Header Start-->
+<div id="header">
+<div id="logo"><a href="#"><img src="images/logo.gif" alt="BKP Jewels Logo" /></a></div>
+
+<div id="top_right_block">
+<ul id="topmenu_right">
+<li><a href="#">Login</a></li><li class="line">|</li>
+<!--<li><a href="#">View Cart</a></li><li class="line">|</li>
+--><li><a href="#">My Basket 0 Items</a></li><li class="line">|</li>
+<li><a href="#">Check Out</a></li>
+</ul>
+
+<div id="search_main">
+  <input type="text"  tabindex="1"/>
+  <input type="submit" value="Search" class="submit" id="button" name="button"></div>
+<div class="clear"></div>
+<div class="offers">Raksha Bhandhan 20% discount on all products </div> 
+
+</div>
+<div class="clear"></div>
+</div>
+
+<!-- Main Nav -->
+<div id="main_nav">
+	<ul class="sf-menu">
+			<li>
+				<a href="index.html">Home</a>
+			</li>
+			<li>
+				<a href="product_display.html">Jewellery</a>
+				<ul>
+					<li>
+						<a href="product_display.html">menu item 1</a>
+						
+					</li>
+					
+					
+					<li>
+						<a href="product_display.html">menu item 2</a>
+						<ul>
+							<li><a href="product_display.html">menu item</a></li>
+							<li><a href="product_display.html">menu item</a></li>
+							<li><a href="product_display.html">menu item</a></li>
+							<li><a href="product_display.html">menu item</a></li>
+							<li><a href="product_display.html">menu item</a></li>
+						</ul>
+					</li>
+					<li>
+						<a href="product_display.html">menu item 3</a>
+						<ul>
+							<li><a href="product_display.html">menu item</a></li>
+							<li><a href="product_display.html">menu item</a></li>
+							<li><a href="product_display.html">menu item</a></li>
+							<li><a href="product_display.html">menu item</a></li>
+							<li><a href="product_display.html">menu item</a></li>
+						</ul>
+					</li>
+				</ul>
+			</li>
+			<li>
+				<a href="#">New Products</a>
+			</li>
+            <li>
+				<a href="#">Gift Voucher</a>
+			</li>	
+		</ul>
+<div class="clear"></div>
+</div>
+
+
+<div id="content_wrapper">
+
+	<!-- Visula Slider -->
+    <div id="slideshow">
+    <img src="images/slider_1.png" alt="slider" class="active" />
+    <img src="images/slider_2.png" alt="slider" />
+     <img src="images/slider_1.png" alt="slider" />
+      <img src="images/slider_2.png" alt="slider" />
+    </div>
+    
+    <!-- Quick Links -->
+    <div class="quicklinks">
+    	<a href="#"><img src="images/exclusive_collection_banner.png" alt="BKP collection" /></a>
+        <a href="#"><img src="images/joinus_banner.png" alt="Join Us" /></a>
+        <a href="#" class="last"><img src="images/specialoffer_banner.png" alt="BKP Special Offers" /></a>
+    <div class="clear"></div>
+    </div>
+    
+    
+
+<div class="clear"></div>
+</div>
+
+
+
+<!--Footer Start-->
+<div id="footer">
+<div id="follow">
+	<div class="signup">
+	  <h3>Sign up for our newsletter</h3><label for="textfield"></label>
+<input type="text" name="textfield" id="textfield" onfocus="if(this.value=='enter email address here') this.value='';" onblur="if(this.value=='') this.value='enter email address here';" value="enter email address here"/><input type="submit" value="Submit" class="submit" id="button" name="button"></div>
+	<div class="f_us">
+    	<h5>Get the latest news, FOLLOW US NOW</h5>
+        <a href="#"><img src="images/i_twitter.gif" alt="Twitter" /></a>
+        <a href="#"><img src="images/i_facebook.gif" alt="Twitter" /></a>
+        <a href="#"><img src="images/i_youtube.gif" alt="Twitter" /></a>
+        <a href="#"><img src="images/i_blog.gif" alt="Twitter" /></a>
+    </div>	
+<div class="clear"></div>
+</div>
+<div class="sitemap">
+<ul class="links">
+<li><a href="#">Home</a></li>
+<li><a href="#">About</a></li>
+<li><a href="#">Login</a></li>
+<li><a href="#">My Account</a></li>
+<li><a href="#">Contact us</a></li>
+</ul>
+<ul class="links">
+<li><a href="#">Delivery</a></li>
+<li><a href="#">Shipping &amp; Returns</a></li>
+<li><a href="#">Terms &amp; Conditions</a></li>
+<li><a href="#">Privacy Notice</a></li>
+<li><a href="#">Condition of Use</a></li>
+</ul>
+<ul class="links">
+<li><a href="#">Facebook</a></li>
+<li><a href="#">Twitter</a></li>
+<li><a href="#">Blog</a></li>
+<li><a href="#">Links</a></li>
+</ul>
+
+<img src="images/geotrust.gif" alt="GeoTrust SSL Certificates" class="right" />
+</div>
+<div class="clear"></div>
+
+<div class="creditcards"><img src="images/cards.gif" alt="we accept" class="right" /></div>
+<div class="powered">
+&copy; 2011 All Rights reserved BKP Jewels. &nbsp; Powered by <a href="http://blueit-services.co.uk/"><img src="images/blueit_icon.gif" alt="Blue IT"  vspace="0"/></a> <a href="http://blueit-services.co.uk/">Blue IT</a>
+</div>
+
+<div class="clear"></div>
+</div>
+<!--Footer End-->
+
+</div>
+</body>
+</html>

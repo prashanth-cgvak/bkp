@@ -1,0 +1,55 @@
+<?php
+// $Id: uc_vat.install,v 1.4 2010/09/17 19:55:34 longwave Exp $
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function uc_vat_uninstall() {
+  variable_del('uc_vat_name');
+  variable_del('uc_vat_suffix_tax');
+  variable_del('uc_vat_suffix_shipping');
+  variable_del('uc_vat_suffix_shipping_link');
+  variable_del('uc_vat_exclude_superuser');
+  variable_del('uc_vat_list_price_inclusive');
+  variable_del('uc_vat_cost_inclusive');
+  variable_del('uc_vat_sell_price_inclusive');
+  variable_del('uc_vat_show_cart_vat');
+  variable_del('uc_vat_show_cart_columns');
+  variable_del('uc_vat_hide_subtotal');
+  variable_del('uc_vat_hide_checkout_exclusive');
+  variable_del('uc_vat_recalculate_prices');
+  variable_del('uc_vat_default_attributes_inclusive');
+}
+
+/**
+ * Split "enter prices inclusive of VAT" option.
+ */
+function uc_vat_update_6000() {
+  $ret = array();
+
+  $value = variable_get('uc_vat_edit_inclusive', FALSE);
+  variable_set('uc_vat_list_price_inclusive', $value);
+  variable_set('uc_vat_cost_inclusive', $value);
+  variable_set('uc_vat_sell_price_inclusive', $value);
+  variable_del('uc_vat_edit_inclusive');
+
+  $ret[] = array('success' => TRUE, 'query' => 'Split "enter prices inclusive of VAT" option into separate options per price field.');
+
+  return $ret;
+}
+
+/**
+ * Remove separate checkout pane in favour of hook_checkout_pane_alter().
+ */
+function uc_vat_update_6001() {
+  $ret = array();
+
+  if (variable_get('uc_pane_cart_vat_enabled', FALSE)) {
+    variable_set('uc_pane_cart_enabled', TRUE);
+  }
+  variable_del('uc_pane_cart_vat_enabled');
+
+  $ret[] = array('success' => TRUE, 'query' => 'Remove separate VAT-enabled checkout pane.');
+
+  return $ret;
+}

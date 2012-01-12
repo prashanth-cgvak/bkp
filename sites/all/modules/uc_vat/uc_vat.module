@@ -1,0 +1,1401 @@
+<?php
+// $Id: uc_vat.module,v 1.62 2010/12/14 22:40:06 longwave Exp $
+
+require_once 'uc_vat.ca.inc';
+
+/**
+ * Implementation of hook_perm().
+ */
+function uc_vat_perm() {
+  return array('show prices excluding VAT');
+}
+
+/**
+ * Implementation of hook_menu().
+ */
+function uc_vat_menu() {
+  $items = array();
+
+  $items['admin/store/settings/taxes/vat'] = array(
+    'title' => t('VAT settings'),
+    'title callback' => 'uc_vat_menu_title',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('uc_vat_settings_form'),
+    'access arguments' => array('configure taxes'),
+    'type' => MENU_LOCAL_TASK,
+    'file' => 'uc_vat.admin.inc',
+  );
+
+  $items['cart/checkout/cart_pane'] = array(
+    'page callback' => 'uc_vat_update_cart_pane',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Menu title callback.
+ */
+function uc_vat_menu_title() {
+  return t('!tax settings', array('!tax' => variable_get('uc_vat_name', 'VAT')));
+}
+
+/**
+ * Implementation of hook_init().
+ */
+function uc_vat_init() {
+  // Add the "tax name" setting as a translatable variable.
+  global $conf;
+  $conf['i18n_variables'][] = 'uc_vat_name';
+}
+
+/**
+ * Implementation of hook_menu_alter().
+ */
+function uc_vat_menu_alter(&$items) {
+  // Override uc_taxes JavaScript callback with our own version.
+  $items['taxes/calculate']['page callback'] = 'uc_vat_uc_taxes_javascript';
+
+  // Override admin order product edit callback with our own version.
+  $items['admin/store/orders/%uc_order/products']['page callback'] = 'uc_vat_uc_order_edit_products';
+
+  // Override checkout order preview pane callback with our own version.
+  $items['cart/checkout/line_items']['page callback'] = 'uc_vat_uc_payment_get_totals';
+}
+
+/**
+ * Implementation of hook_uc_price_handler().
+ */
+function uc_vat_uc_price_handler() {
+  return array(
+    'alter' => array(
+      'title' => t('!tax price alterer', array('!tax' => variable_get('uc_vat_name', 'VAT'))),
+      'description' => t('Modifies prices to include tax before checkout.'),
+      'callback' => 'uc_vat_price_handler_alter',
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_theme().
+ */
+function uc_vat_theme($existing, $type, $theme, $path) {
+  return array(
+    'uc_vat_cart_review_table' => array(
+      'arguments' => array('show_subtotal' => TRUE, 'order' => NULL),
+      'file' => 'uc_vat.theme.inc',
+    ),
+    'uc_vat_excluding_shipping_costs' => array(
+      'arguments' => array('element' => 'span'),
+      'file' => 'uc_vat.theme.inc',
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_form_alter().
+ */
+function uc_vat_form_alter(&$form, $form_state) {
+  if (uc_product_is_product_form($form)) {
+    // Add VAT to product prices before editing.
+    $taxes = uc_vat_load_taxes();
+    if ($fields = _uc_vat_product_fields()) {
+      foreach ($fields as $field) {
+        $value = $form['base']['prices'][$field]['#default_value'];
+        foreach ($taxes as $tax) {
+          if (in_array($form['#node']->type, $tax->taxed_product_types) && ($tax->shippable == 0 || $form['#node']->shippable == 1)) {
+            $value *= 1 + $tax->rate;
+          }
+        }
+        $form['base']['prices'][$field]['#default_value'] = uc_store_format_price_field_value(round($value, 4));
+      }
+
+      if (module_exists('uc_multiprice')) {
+        foreach (element_children($form['multiprice']['countries']) as $country) {
+          foreach ($fields as $field) {
+            $value = $form['multiprice']['countries'][$country][$field]['#default_value'];
+            foreach ($taxes as $tax) {
+              if (in_array($form['#node']->type, $tax->taxed_product_types) && ($tax->shippable == 0 || $form['#node']->shippable == 1)) {
+                $value *= 1 + $tax->rate;
+              }
+            }
+            $form['multiprice']['countries'][$country][$field]['#default_value'] = uc_store_format_price_field_value(round($value, 3));
+          }
+        }
+      }
+
+      $form['#submit'][] = 'uc_vat_uc_product_form_submit';
+    }
+
+    // Add help message to product price descriptions.
+    foreach (array('list_price', 'cost', 'sell_price') as $field) {
+      $desc = substr($form['base']['prices'][$field]['#description'], 0, -1) .', ';
+      $desc .= variable_get('uc_vat_'. $field .'_inclusive', FALSE) ? t('including !tax.', array('!tax' => variable_get('uc_vat_name', 'VAT'))) : t('excluding !tax.', array('!tax' => variable_get('uc_vat_name', 'VAT')));
+      $form['base']['prices'][$field]['#description'] = $desc;
+    }
+  }
+}
+
+/**
+ * Remove VAT from product prices after editing but before saving.
+ */
+function uc_vat_uc_product_form_submit($form, &$form_state) {
+  $taxes = uc_vat_load_taxes();
+  $fields = _uc_vat_product_fields();
+
+  foreach ($fields as $field) {
+    $value = $form_state['values'][$field];
+    foreach (array_reverse($taxes) as $tax) {
+      if (in_array($form['#node']->type, $tax->taxed_product_types) && ($tax->shippable == 0 || $form['#node']->shippable == 1)) {
+        $value /= (1 + $tax->rate);
+      }
+    }
+    $form_state['values'][$field] = $value;
+  }
+
+  if (module_exists('uc_multiprice')) {
+    foreach (array_keys($form_state['values']['multiprice']['countries']) as $country) {
+      foreach ($fields as $field) {
+        $value = $form_state['values']['multiprice']['countries'][$country][$field];
+        foreach (array_reverse($taxes) as $tax) {
+          if (in_array($form['#node']->type, $tax->taxed_product_types) && ($tax->shippable == 0 || $form['#node']->shippable == 1)) {
+            $value /= (1 + $tax->rate);
+          }
+        }
+        $form_state['values']['multiprice']['countries'][$country][$field] = $value;
+      }
+    }
+  }
+}
+
+/**
+ * Add VAT to product prices when editing orders.
+ */
+function uc_vat_form_uc_order_edit_form_alter(&$form, $form_state) {
+  if (_uc_vat_attribute_fields()) {
+    array_unshift($form['#submit'], 'uc_vat_uc_order_edit_form_submit');
+  }
+}
+
+function uc_vat_form_uc_order_edit_products_form_alter(&$form, $form_state) {
+  $order = uc_order_load($form['#parameters'][2][0]->order_id);
+  $taxes = isset($order->data['taxes']) ? $order->data['taxes'] : uc_vat_load_taxes();
+
+  // Use attribute field names as the true price field is named just "price" not "sell price".
+  if ($fields = _uc_vat_attribute_fields()) {
+    foreach (element_children($form['products']) as $i) {
+      if (isset($form['products'][$i]['nid']['#value'])) {
+        $node = node_load($form['products'][$i]['nid']['#value']);
+        foreach ($fields as $field) {
+          $value = $form['products'][$i][$field]['#value'];
+          foreach ($taxes as $tax) {
+            if (in_array($node->type, $tax->taxed_product_types) && ($tax->shippable == 0 || $node->shippable == 1)) {
+              $value *= 1 + $tax->rate;
+            }
+          }
+          $form['products'][$i][$field]['#value'] = uc_store_format_price_field_value(round($value, 4));
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Remove VAT from product prices when adding/editing products using the JavaScript functionality on the edit order page.
+ */
+function uc_vat_uc_order_edit_products($order) {
+  _uc_vat_uc_order_edit_products_submit($order);
+  uc_order_edit_products($order);
+}
+
+/**
+ * Remove VAT from product prices when editing orders.
+ */
+function uc_vat_uc_order_edit_form_submit($form, &$form_state) {
+  $order = uc_order_load($form_state['values']['order_id']);
+  _uc_vat_uc_order_edit_products_submit($order);
+}
+
+function _uc_vat_uc_order_edit_products_submit($order) {
+  $taxes = isset($order->data['taxes']) ? $order->data['taxes'] : uc_vat_load_taxes();
+  $fields = _uc_vat_attribute_fields();
+
+  // Modify $_POST directly, as products are subform elements injected into the form, not real Form API elements.
+  foreach (element_children($_POST['products']) as $i) {
+    if (isset($_POST['products'][$i]['nid'])) {
+      $node = node_load($_POST['products'][$i]['nid']);
+      foreach ($fields as $field) {
+        $value = $_POST['products'][$i][$field];
+        foreach (array_reverse($taxes) as $tax) {
+          if (in_array($node->type, $tax->taxed_product_types) && ($tax->shippable == 0 || $node->shippable == 1)) {
+            $value /= (1 + $tax->rate);
+          }
+        }
+        $_POST['products'][$i][$field] = $value;
+      }
+    }
+  }
+}
+
+/**
+ * Alter default attribute options overview form to add VAT if necessary.
+ */
+function uc_vat_form_uc_attribute_options_form_alter(&$form, $form_state) {
+  if ($fields = _uc_vat_attribute_fields()) {
+    if (variable_get('uc_vat_default_attributes_inclusive', FALSE)) {
+      $attribute = uc_attribute_load($form['aid']['#value']);
+      $context = array(
+        'revision' => 'themed',
+        'type' => 'attribute_option',
+        'subject' => array(
+          'attribute' => $attribute,
+        ),
+      );
+      $taxes = uc_vat_load_taxes();
+
+      foreach ($attribute->options as $oid => $option) {
+        foreach ($fields as $field) {
+          $value = $option->$field;
+          // Apply all taxes as this is a default attribute and product type is
+          // not yet known.
+          foreach ($taxes as $tax) {
+            $value *= (1 + $tax->rate);
+          }
+          $context['subject']['option'] = $option;
+          $context['field'] = $field;
+          $form['options'][$oid][$field]['#value'] = uc_price($value, $context);
+        }
+      }
+
+      $message = _uc_vat_attribute_description(t('Default cost'), t('Default price'));
+    }
+    else {
+      $message = t('Prices shown here are exclusive of !tax. !tax will be added where applicable when these attributes are added to products.', array('!tax' => variable_get('uc_vat_name', 'VAT')));
+    }
+
+    $form['vat_note'] = array(
+      '#type' => 'markup',
+      '#value' => '<p>'. $message .'</p>',
+    );
+  }
+}
+
+/**
+ * Alter default attribute options edit form to add VAT if necessary.
+ */
+function uc_vat_form_uc_attribute_option_form_alter(&$form, $form_state) {
+  if ($fields = _uc_vat_attribute_fields()) {
+    if (variable_get('uc_vat_default_attributes_inclusive', FALSE)) {
+      $attribute = uc_attribute_load($form['aid']['#value']);
+      $option = $attribute->options[$form['oid']['#value']];
+      $taxes = uc_vat_load_taxes();
+
+      foreach ($fields as $field) {
+        $value = $option->$field;
+        // Apply all taxes as this is a default attribute and product type is
+        // not yet known.
+        foreach ($taxes as $tax) {
+          $value *= (1 + $tax->rate);
+        }
+        $form['adjustments'][$field]['#default_value'] = uc_store_format_price_field_value(round($value, 4));
+      }
+
+      // Ensure our submit handler gets called first to remove VAT from the
+      // price entered.
+      array_unshift($form['#submit'], 'uc_vat_uc_attribute_option_form_submit');
+
+      $message = _uc_vat_attribute_description(t('Cost'), t('Price'));
+    }
+    else {
+      $message = t('Prices entered must exclude !tax. !tax will be added where applicable when this attribute is added to a product.', array('!tax' => variable_get('uc_vat_name', 'VAT')));
+    }
+
+    $form['adjustments']['#description'] .= '<br />'. $message;
+  }
+}
+
+/**
+ * Remove VAT from default option prices.
+ */
+function uc_vat_uc_attribute_option_form_submit($form, &$form_state) {
+  $taxes = uc_vat_load_taxes();
+
+  foreach (_uc_vat_attribute_fields() as $field) {
+    $value = $form_state['values'][$field];
+    // Apply all taxes as this is a default attribute and product type is not
+    // yet known.
+    foreach (array_reverse($taxes) as $tax) {
+      $value /= (1 + $tax->rate);
+    }
+    $form_state['values'][$field] = $value;
+  }
+}
+
+/**
+ * Alter product options form to add VAT if necessary.
+ */
+function uc_vat_form_uc_object_options_form_alter(&$form, $form_state) {
+  $form['vat_note'] = array(
+    '#type' => 'markup',
+    '#value' => '<p>'. t('Note:') .' '. _uc_vat_attribute_description(t('Cost'), t('Price')) .'</p>',
+  );
+
+  if ($fields = _uc_vat_attribute_fields()) {
+    // This form is used for products and product classes, and we need to know the node type.
+    $object = $form['#parameters'][2];
+    $type = $form['#parameters'][3] == 'product' ? $object->type : $object->pcid;
+    $taxes = uc_vat_load_taxes();
+
+    foreach (element_children($form['attributes']) as $aid) {
+      foreach (element_children($form['attributes'][$aid]['options']) as $oid) {
+        foreach ($fields as $field) {
+          $value = $form['attributes'][$aid]['options'][$oid][$field]['#default_value'];
+          foreach ($taxes as $tax) {
+            if (in_array($type, $tax->taxed_product_types)) {
+              $value *= (1 + $tax->rate);
+            }
+          }
+          $form['attributes'][$aid]['options'][$oid][$field]['#default_value'] = uc_store_format_price_field_value(round($value, 4));
+        }
+      }
+    }
+
+    // Ensure our submit handler gets called first to remove VAT from the price entered.
+    array_unshift($form['#submit'], 'uc_vat_uc_object_options_form_submit');
+  }
+}
+
+/**
+ * Remove VAT from product option prices.
+ */
+function uc_vat_uc_object_options_form_submit($form, &$form_state) {
+  $object = $form['#parameters'][2];
+  $type = $form['#parameters'][3] == 'product' ? $object->type : $object->pcid;
+  $taxes = uc_vat_load_taxes();
+
+  foreach (element_children($form['attributes']) as $aid) {
+    foreach (element_children($form['attributes'][$aid]['options']) as $oid) {
+      foreach (_uc_vat_attribute_fields() as $field) {
+        $value = $form_state['values']['attributes'][$aid]['options'][$oid][$field];
+        foreach (array_reverse($taxes) as $tax) {
+          if (in_array($type, $tax->taxed_product_types)) {
+            $value /= (1 + $tax->rate);
+          }
+        }
+        $form_state['values']['attributes'][$aid]['options'][$oid][$field] = $value;
+      }
+    }
+  }
+}
+
+/**
+ * Description helper for attribute form alter functions.
+ */
+function _uc_vat_attribute_description($cost_field, $price_field) {
+  $name = variable_get('uc_vat_name', 'VAT');
+  if (variable_get('uc_vat_cost_inclusive', FALSE)) {
+    $message = t('"!field" includes !tax.', array('!field' => $cost_field, '!tax' => $name));
+  }
+  else {
+    $message = t('"!field" excludes !tax.', array('!field' => $cost_field, '!tax' => $name));
+  }
+  $message .= ' ';
+  if (variable_get('uc_vat_sell_price_inclusive', FALSE)) {
+    $message .= t('"!field" includes !tax.', array('!field' => $price_field, '!tax' => $name));
+  }
+  else {
+    $message .= t('"!field" excludes !tax.', array('!field' => $price_field, '!tax' => $name));
+  }
+  return $message;
+}
+
+/**
+ * Add price recalculation submit handler to tax edit forms.
+ */
+function uc_vat_form_uc_taxes_form_alter(&$form, $form_state) {
+  if ($form['id']['#value'] && _uc_vat_product_fields()) {
+    if (variable_get('uc_vat_recalculate_prices', FALSE)) {
+      $form['recalculation_note'] = array(
+        '#value' => '<p>'. t('If the rate is changed, product and attribute prices will be recalculated, so !tax exclusive prices will change but !tax inclusive prices will stay the same. Visit the <a href="!url">!tax settings</a> page to change this behaviour.', array('!tax' => variable_get('uc_vat_name', 'VAT'), '!url' => url('admin/store/settings/taxes/vat'))) .'</p>',
+        '#weight' => -10,
+      );
+      module_load_include('inc', 'uc_vat', 'uc_vat.recalculate');
+      $form['#submit'][] = 'uc_vat_recalculate_prices';
+    }
+    else {
+      $form['recalculation_note'] = array(
+        '#value' => '<p>'. t('If the rate is changed, product and attribute prices will not be recalculated, so !tax inclusive prices will change. Visit the <a href="!url">!tax settings</a> page to change this behaviour.', array('!tax' => variable_get('uc_vat_name', 'VAT'), '!url' => url('admin/store/settings/taxes/vat'))) .'</p>',
+        '#weight' => -10,
+      );
+    }
+  }
+}
+
+/**
+ * Implementation of hook_order().
+ *
+ * Ensure tax rules have been saved with the order.
+ */
+function uc_vat_order($op, $arg1, $arg2) {
+  switch ($op) {
+    case 'save':
+      $data = unserialize(db_result(db_query("SELECT data FROM {uc_orders} WHERE order_id = %d", $arg1->order_id)));
+      if (!isset($data['taxes'])) {
+        $data['taxes'] = uc_vat_load_taxes($arg1, user_load($arg1->uid));
+        db_query("UPDATE {uc_orders} SET data = '%s' WHERE order_id = %d", serialize($data), $arg1->order_id);
+      }
+  }
+}
+
+/**
+ * VAT price alterer callback function.
+ */
+function uc_vat_price_handler_alter(&$price, &$context, &$options) {
+  // Do nothing if user has "show prices without VAT" permission.
+  if (uc_vat_exclude_vat()) {
+    return;
+  }
+
+  if (isset($context['subject']['order']->data['taxes'])) {
+    // Use stored tax rates from an existing order if available.
+    $tax_rates = $context['subject']['order']->data['taxes'];
+  }
+  else {
+    // Load tax rates according to conditional actions rules, using context where available.
+    $tax_rates = uc_vat_load_taxes($context['subject']['order'], $context['account']);
+  }
+
+  switch ($context['type']) {
+    case 'product':
+    case 'cart_item':
+    case 'order_product':
+      $node = $context['subject']['node'];
+
+      // Ensure that all the parts are there when the data comes from Views.
+      if (!isset($node->type) || !isset($node->sell_price) || !isset($node->shippable)) {
+        $node = node_load($node->nid);
+      }
+
+      uc_vat_product_price_alter($price, $context, $options, $tax_rates, $node);
+      break;
+
+    case 'attribute_option':
+      $node = node_load($context['subject']['option']->nid);
+      uc_vat_product_price_alter($price, $context, $options, $tax_rates, $node);
+      break;
+
+    case 'line_item':
+      uc_vat_line_item_price_alter($price, $context, $options, $tax_rates);
+      break;
+  }
+}
+
+/**
+ * Apply conditional actions to an order and return only the active set of taxes.
+ * If no order is supplied, make a reasonable guess as to which country the user is in.
+ */
+function uc_vat_load_taxes($order = NULL, $account = NULL) {
+  global $user;
+
+  // Use the current user if none was supplied.
+  if (!$account) {
+    $account = $user;
+  }
+
+  // Build a fake order object if none was supplied.
+  if (!$order) {
+    $order = new stdClass();
+    $order->uid = $account->uid;
+    $order->order_id = 0;
+    $order->order_status = uc_order_state_default('in_checkout');
+  }
+
+  // Ensure we have a country code for the order.
+  if (!isset($order->billing_country) || !isset($order->delivery_country)) {
+    // Default to store country.
+    $country_id = variable_get('uc_store_country', 840);
+
+    // TODO: find alternative ways of guessing the country if we do not know it
+    // - If user is logged in, look for previous completed orders and assume the same country will be used?
+    // - If that fails or user is not logged in, use geolocation if available?
+
+    if (!isset($order->billing_country)) {
+      $order->billing_country = $country_id;
+    }
+    if (!isset($order->delivery_country)) {
+      $order->delivery_country = $country_id;
+    }
+  }
+
+  // Run CA rules against the order.
+  $predicates = ca_load_trigger_predicates('calculate_taxes');
+  $arguments = array(
+    'order' => array(
+      '#entity' => 'uc_order',
+      '#title' => t('Order'),
+      '#data' => $order,
+    ),
+    'tax' => array(
+      '#entity' => 'tax',
+      '#title' => t('Tax rule'),
+    ),
+    'account' => array(
+      '#entity' => 'user',
+      '#title' => t('User'),
+      '#data' => $account,
+    ),
+  );
+
+  // Only use taxes that match the CA rules.
+  $taxes = uc_taxes_rate_load();
+  foreach ($taxes as $id => $tax) {
+    $arguments['tax']['#data'] = $tax;
+    if (!ca_evaluate_conditions($predicates['uc_taxes_'. $tax->id], $arguments)) {
+      unset($taxes[$id]);
+    }
+  }
+  return $taxes;
+}
+
+/**
+ * Handle VAT on product-type prices.
+ */
+function uc_vat_product_price_alter(&$price, &$context, &$options, $tax_rates, $node) {
+  $suffixes = array();
+
+  $original_price = $price['price'];
+
+  if ($node->type == 'product_kit') {
+    // Special case for product kits; calculate VAT per-product including any kit discount.
+    foreach ($node->products as $product) {
+      foreach ($tax_rates as $tax) {
+        if (in_array($product->type, $tax->taxed_product_types) && ($tax->shippable == 0 || $product->shippable == 1)) {
+          // This uses the original sell_price, which will not necessarily be correct if another price alterer is enabled.
+          // Instead, should we try to proportionally back-calculate the individual product prices from the price we were passed?
+          if ($context['field'] == 'sell_price') {
+            $price['price'] += ($product->sell_price + $product->discount) * $product->qty * $tax->rate;
+          }
+          else {
+            $price['price'] += $product->sell_price * $product->qty * $tax->rate;
+          }
+          $suffixes[$tax->id] = $tax->name;
+        }
+      }
+    }
+  }
+  else {
+    $taxed_price = $price['price'];
+    foreach ($tax_rates as $tax) {
+      if (in_array($node->type, $tax->taxed_product_types) && ($tax->shippable == 0 || $node->shippable == 1)) {
+        $price['price'] += $taxed_price * $tax->rate;
+        $suffixes[$tax->id] = $tax->name;
+      }
+    }
+  }
+
+  if ($context['type'] == 'product') {
+    if (!empty($suffixes) && variable_get('uc_vat_suffix_tax', FALSE)) {
+      $options['suffixes'][] = ' <span class="price-vat-suffix">'. t('including !taxes', array('!taxes' => implode(', ', $suffixes))) .'</span>';
+    }
+
+    if (variable_get('uc_vat_suffix_shipping', FALSE) && $node->shippable) {
+      $options['suffixes'][] = ' ' . theme('uc_vat_excluding_shipping_costs');
+    }
+
+    if (!empty($suffixes) && variable_get('uc_vat_suffix_exclusive', FALSE)) {
+      $options['suffixes'][] = ' <span class="price-vat-exclusive">('. uc_currency_format($original_price) . ' ' . t('excluding !tax', array('!tax' => variable_get('uc_vat_name', 'VAT'))) .')</span>';
+    }
+
+    if (empty($suffixes) && variable_get('uc_vat_suffix_zero_rated', FALSE)) {
+      $options['suffixes'][] = ' <span class="price-no-vat">('. t('no !tax applicable', array('!tax' => variable_get('uc_vat_name', 'VAT'))) .')</span>';
+    }
+  }
+}
+
+/**
+ * Handle VAT on line items.
+ */
+function uc_vat_line_item_price_alter(&$price, &$context, &$options, $tax_rates) {
+  $order = $context['subject']['order'];
+  $line_item = (array)$context['subject']['line_item'];
+
+  // If we are in the order preview pane at checkout, the tax conditions may have changed,
+  // so force recalculation of the subtotal line item here.
+  if ($_GET['q'] == 'cart/checkout/line_items' && $line_item['type'] == 'subtotal') {
+    $price['price'] = uc_order_get_total($order, TRUE);
+  }
+
+  // Add the taxes that satisfy the conditions and apply to this line item
+  // to its amount.
+  foreach ($tax_rates as $tax_rate) {
+    // Special handling for modules that provide their own tax adjustments.
+    $callback = _line_item_data($line_item['type'], 'tax_adjustment');
+    if (variable_get('uc_vat_line_item_adjustment', FALSE) && $callback && function_exists($callback)) {
+      $price['price'] += $callback($line_item['amount'], $order, $tax_rate);
+    }
+    else {
+      $taxed_line_items = $tax_rate->taxed_line_items;
+      if (is_array($taxed_line_items) && in_array($line_item['type'], $taxed_line_items)) {
+        if ($line_item['type'] == 'tax' && $line_item['weight'] >= $tax_rate->weight) {
+          continue;
+        }
+
+        // The total tax amount comes from many sources, so only add the tax
+        // that was applied to this line item.
+        $price['price'] += $line_item['amount'] * $tax_rate->rate;
+      }
+    }
+  }
+}
+
+/**
+ * Implementation of hook_line_item_data_alter().
+ */
+function uc_vat_line_item_data_alter(&$items) {
+  foreach ($items as &$item) {
+    switch ($item['id']) {
+      case 'shipping':
+        // This only takes effect if line item tax adjustments are enabled.
+        switch (variable_get('uc_vat_apply_shipping', 'normal')) {
+          case 'highest':
+            $item['tax_adjustment'] = 'uc_vat_shipping_tax_adjustment_highest';
+            break;
+
+          case 'proportional':
+            $item['tax_adjustment'] = 'uc_vat_shipping_tax_adjustment_proportional';
+            break;
+        }
+        break;
+
+      case 'subtotal':
+        // Hide the standard subtotal line.
+        if (variable_get('uc_vat_hide_subtotal', FALSE)) {
+          $item['callback'] = NULL;
+        }
+        break;
+
+      case 'tax':
+        // Allow per-line item tax adjustments.
+        if (variable_get('uc_vat_line_item_adjustment', FALSE)) {
+          $item['callback'] = 'uc_vat_line_item_tax';
+        }
+
+        // Tax amounts are added in to other line items, so the actual tax line
+        // items should not be added to the order total - unless VAT is excluded
+        // from display, when it will not have been included already.
+        if (!uc_vat_exclude_vat()) {
+          $item['calculated'] = FALSE;
+        }
+        break;
+
+      case 'tax_subtotal':
+        if (uc_vat_exclude_vat() || variable_get('uc_vat_hide_checkout_exclusive', FALSE)) {
+          // Hide the subtotal excluding VAT line entirely.
+          $item['callback'] = NULL;
+        }
+        else {
+          // Show the subtotal excluding VAT line if any VAT was applied.
+          $item['callback'] = 'uc_vat_line_item_tax_subtotal';
+        }
+        break;
+    }
+  }
+}
+
+/**
+ * Handle tax on shipping using EU VAT rules.
+ * Shipping tax is applied at the highest rate used in items in the order.
+ */
+function uc_vat_shipping_tax_adjustment_highest($price, $order, $current_tax) {
+  $tax_rates = isset($order->data['taxes']) ? $order->data['taxes'] : uc_taxes_rate_load();
+  $apply = FALSE;
+
+  // Figure out whether the current rate is the highest rate on shippable items.
+  foreach ($order->products as $item) {
+    $node = node_load($item->nid);
+    if ($node->shippable) {
+      foreach ($tax_rates as $tax) {
+        if (in_array($node->type, $tax->taxed_product_types) && ($tax->shippable == 0 || $node->shippable == 1)) {
+          // Tax applies to this item.
+          if ($tax->rate > $current_tax->rate) {
+            // Bail out immediately, as we found a product with a higher tax rate.
+            return 0;
+          }
+          if ($tax->id == $current_tax->id) {
+            // Mark this tax to be applied (unless we find a higher one).
+            $apply = TRUE;
+          }
+        }
+      }
+    }
+  }
+
+  return $apply ? ($price * $current_tax->rate) : 0;
+}
+
+/**
+ * Handle tax on shipping using EU VAT rules.
+ * Shipping tax is applied proportionally based on items in the order.
+ */
+function uc_vat_shipping_tax_adjustment_proportional($price, $order, $tax) {
+  // Calculate subtotal of items with this tax rate, and total of all items.
+  $subtotal = 0;
+  $total = 0;
+  foreach ($order->products as $item) {
+    $node = node_load($item->nid);
+    if ($node->shippable) {
+      $total += $item->price * $item->qty;
+      if (in_array($node->type, $tax->taxed_product_types) && ($tax->shippable == 0 || $node->shippable == 1)) {
+        // Tax applies to this item.
+        $subtotal += $item->price * $item->qty;
+      }
+    }
+  }
+
+  if ($total == 0) {
+    return 0;
+  }
+
+  // Return proportional amount that applies to this tax rate.
+  return $price * ($subtotal / $total) * $tax->rate;
+}
+
+/**
+ * Callback for tax line item.
+ *
+ * @see uc_line_item_tax()
+ */
+function uc_vat_line_item_tax($op, $order) {
+  switch ($op) {
+    case 'load':
+      $lines = array();
+      $taxes = uc_vat_calculate_vat($order);
+      foreach ($taxes as $tax) {
+        $lines[] = array(
+          'id' => ($tax->summed ? 'tax' : 'tax_included'),
+          'title' => $tax->name,
+          'amount' => $tax->amount,
+          'weight' => variable_get('uc_li_tax_weight', 9) + $tax->weight / 10,
+          'data' => $tax->data,
+        );
+      }
+      return $lines;
+  }
+}
+
+/**
+ * Calculate all taxes on an order using VAT rules.
+ *
+ * @see uc_taxes_calculate_tax()
+ */
+function uc_vat_calculate_vat($order) {
+  global $user;
+  if (is_numeric($order)) {
+    $order = uc_order_load($order);
+    $account = user_load(array('uid' => $order->uid));
+  }
+  elseif ((int)$order->uid) {
+    $account = user_load(array('uid' => intval($order->uid)));
+  }
+  else {
+    $account = $user;
+  }
+  if (!is_object($order)) {
+    return array();
+  }
+  if (empty($order->delivery_postal_code)) {
+    $order->delivery_postal_code = $order->billing_postal_code;
+  }
+  if (empty($order->delivery_zone)) {
+    $order->delivery_zone = $order->billing_zone;
+  }
+  if (empty($order->delivery_country)) {
+    $order->delivery_country = $order->billing_country;
+  }
+
+  $order->taxes = array();
+
+  if (isset($order->order_status)) {
+    $state = uc_order_status_data($order->order_status, 'state');
+    $use_same_rates = in_array($state, array('payment_received', 'completed'));
+  }
+  else {
+    $use_same_rates = FALSE;
+  }
+
+  $arguments = array(
+    'order' => array(
+      '#entity' => 'uc_order',
+      '#title' => t('Order'),
+      '#data' => $order,
+    ),
+    'tax' => array(
+      '#entity' => 'tax',
+      '#title' => t('Tax rule'),
+      // #data => each $tax in the following foreach() loop;
+    ),
+    'account' => array(
+      '#entity' => 'user',
+      '#title' => t('User'),
+      '#data' => $account,
+    ),
+  );
+
+  $predicates = ca_load_trigger_predicates('calculate_taxes');
+  foreach (uc_taxes_rate_load() as $tax) {
+    if ($use_same_rates) {
+      foreach ((array)$order->line_items as $old_line) {
+        if ($old_line['type'] == 'tax' && $old_line['data']['tax_id'] == $tax->id) {
+          $tax->rate = $old_line['data']['tax_rate'];
+          break;
+        }
+      }
+    }
+
+    $arguments['tax']['#data'] = $tax;
+    if (ca_evaluate_conditions($predicates['uc_taxes_'. $tax->id], $arguments)) {
+      $line_item = uc_vat_apply_tax($order, $tax);
+      if ($line_item) {
+        $order->taxes[$line_item->id] = $line_item;
+      }
+    }
+  }
+
+  return $order->taxes;
+}
+
+/**
+ * Apply a VAT tax to an order.
+ *
+ * @see uc_taxes_apply_tax()
+ */
+function uc_vat_apply_tax($order, $tax) {
+  $taxable_amount = 0;
+  if (is_array($order->products)) {
+    foreach ($order->products as $item) {
+      $taxable_amount += uc_taxes_apply_item_tax($item, $tax);
+    }
+  }
+  $taxed_line_items = $tax->taxed_line_items;
+  if (is_array($order->line_items) && is_array($taxed_line_items)) {
+    foreach ($order->line_items as $key => $line_item) {
+      // Special handling for modules that provide their own tax adjustments.
+      $callback = _line_item_data($line_item['type'], 'tax_adjustment');
+      if ($callback && function_exists($callback)) {
+        $taxable_amount += $callback($line_item['amount'], $order, $tax) / $tax->rate;
+        continue;
+      }
+
+      if ($line_item['type'] == 'tax') {
+        // Don't tax old taxes.
+        continue;
+      }
+      if (in_array($line_item['type'], $taxed_line_items)) {
+        $taxable_amount += $line_item['amount'];
+      }
+    }
+  }
+  if (isset($taxed_line_items['tax'])) {
+    // Tax taxes that were just calculated.
+    foreach ($order->taxes as $other_tax) {
+      $taxable_amount += $other_tax->amount;
+    }
+  }
+  $amount = $taxable_amount * $tax->rate;
+  if ($amount) {
+    $line_item = (object)array(
+      'id' => $tax->id,
+      'name' => $tax->name,
+      'amount' => $amount,
+      'weight' => $tax->weight,
+      'summed' => 1,
+    );
+    $line_item->data = array(
+      'tax_id' => $tax->id,
+      'tax_rate' => $tax->rate,
+      'taxable_amount' => $taxable_amount,
+      'tax_jurisdiction' => $tax->name,
+    );
+    return $line_item;
+  }
+}
+
+/**
+ * Callback for "subtotal excluding VAT" line item.
+ */
+function uc_vat_line_item_tax_subtotal($op, $order) {
+  $amount = 0;
+  if (is_array($order->products)) {
+    foreach ($order->products as $item) {
+      $amount += $item->price * $item->qty;
+    }
+  }
+  if (is_array($order->line_items)) {
+    foreach ($order->line_items as $key => $line_item) {
+      if ($line_item['type'] == 'tax') {
+        $has_taxes = TRUE;
+      }
+      if (_line_item_data($line_item['type'], 'calculated') == TRUE) {
+        $amount += $line_item['amount'];
+      }
+    }
+  }
+  if (is_array($order->taxes)) {
+    $has_taxes = TRUE;
+  }
+  if ($has_taxes) {
+    switch ($op) {
+      case 'cart-preview':
+        drupal_add_js("if (Drupal.jsEnabled) { \$(document).ready(function() {
+          if (window.set_line_item) {
+            set_line_item('tax_subtotal', '". t('Subtotal excluding !tax', array('!tax' => variable_get('uc_vat_name', 'VAT'))) ."', ". $amount .", ". variable_get('uc_li_tax_subtotal_weight', 8) .");
+          }
+        })};", 'inline');
+      break;
+      case 'load':
+        return array(array(
+          'id' => 'tax_subtotal',
+          'title' => t('Subtotal excluding !tax', array('!tax' => variable_get('uc_vat_name', 'VAT'))),
+          'amount' => $amount,
+          'weight' => variable_get('uc_li_tax_subtotal_weight', 7),
+        ));
+    }
+  }
+}
+
+/**
+ * Implementation of hook_line_item_alter().
+ */
+function uc_vat_line_item_alter(&$item, $order) {
+  // If we are hiding the exclusive subtotal, add prefix and move to the bottom of the list.
+  if (is_array($item) && $item['type'] == 'tax' && variable_get('uc_vat_hide_checkout_exclusive', FALSE)) {
+    $item['title'] = t('incl. !tax', array('!tax' => $item['title']));
+    $item['weight'] = 16;
+  }
+}
+
+/**
+ * AJAX callback for order preview, overridden from uc_taxes.
+ *
+ * Calculate tax amounts for an order in the payment checkout pane.
+ */
+function uc_vat_uc_taxes_javascript() {
+  $order = $_POST['order'];
+  if ($order = unserialize(rawurldecode($order))) {
+    $taxes = uc_vat_calculate_vat($order);
+
+    // Add incl. to tax line items if we are hiding the exclusive subtotal.
+    if (variable_get('uc_vat_hide_checkout_exclusive', FALSE)) {
+      foreach ($taxes as $id => $tax) {
+        $taxes[$id]->name = t('incl. !tax', array('!tax' => $tax->name));
+      }
+    }
+
+    $callback = _line_item_data('tax_subtotal', 'callback');
+    if (function_exists($callback)) {
+      $subtotal = $callback('load', $order);
+      if (is_array($subtotal) && !empty($taxes)) {
+        $taxes['subtotal'] = (object)array(
+          'id' => 'subtotal',
+          'name' => $subtotal[0]['title'],
+          'amount' => $subtotal[0]['amount'],
+          'weight' => -10,
+          'summed' => 0,
+        );
+      }
+    }
+  }
+  drupal_json((array) $taxes);
+}
+
+/**
+ * Implementation of hook_cart_pane_alter().
+ */
+function uc_vat_cart_pane_alter(&$panes) {
+  if (uc_cart_is_shippable() && variable_get('uc_vat_suffix_shipping', FALSE)) {
+    foreach ($panes as &$pane) {
+      if ($pane['id'] == 'cart_form') {
+        $pane['body'] = str_replace('<div id="cart-form-buttons">', theme('uc_vat_excluding_shipping_costs', 'div') . '<div id="cart-form-buttons">', $pane['body']);
+      }
+    }
+  }
+}
+
+/**
+ * Implementation of hook_tapir_table_alter().
+ */
+function uc_vat_tapir_table_alter(&$table, $table_id) {
+  if ($table_id == 'uc_cart_view_table' && variable_get('uc_vat_show_cart_vat', FALSE) && !uc_vat_exclude_vat()) {
+    uc_vat_uc_cart_view_table_alter($table);
+  }
+}
+
+/**
+ * Add VAT subtotals to cart table.
+ */
+function uc_vat_uc_cart_view_table_alter(&$table) {
+  $taxes = uc_vat_load_taxes();
+  $cart = uc_cart_get_contents();
+
+  $subtotal = 0;
+  $tax_subtotals = array();
+  $extra_rows = array();
+
+  foreach (element_children($table) as $i) {
+    if (isset($table[$i]['#total'])) {
+      $node = node_load($table[$i]['nid']['#value']);
+      if ($node) {
+        $subtotal += $table[$i]['#total'];
+        foreach ($taxes as $id => $tax) {
+          if (in_array($node->type, $tax->taxed_product_types) && ($tax->shippable == 0 || $node->shippable == 1)) {
+            if (!isset($tax_subtotals[$id])) {
+              $tax_subtotals[$id] = 0;
+            }
+            $tax_subtotals[$id] += $table[$i]['#total'] - $table[$i]['#total'] / (1 + $tax->rate);
+          }
+        }
+
+        // Product_kits special handling: check through product_kits
+        if ($node->type == 'product_kit' && is_array($node->products)) {
+          foreach ($node->products as $pk_nid => $pk_node) {
+            if (in_array($pk_node->type, $tax->taxed_product_types) && ($tax->shippable == 0 || $pk_node->shippable == 1)) {
+              $tax_subtotal += ($pk_node->sell_price+$pk_node->discount) * $pk_node->qty * $table[$i]['qty']['#default_value'] * ($tax->rate);
+            }
+          }
+        }
+
+      }
+      else {
+        // No node data means no tax information available, so move this line to after the tax summary.
+        $extra_rows[] = $table[$i];
+        unset($table[$i]);
+      }
+    }
+    else {
+      unset($table[$i]);
+    }
+  }
+
+  $context = array(
+    'revision' => 'themed-original',
+    'type' => 'amount',
+  );
+
+  if ($tax_subtotals && !variable_get('uc_vat_hide_checkout_exclusive', FALSE)) {
+    $table[] = array(
+      'total' => array(
+        '#value' => '<strong>'. t('Subtotal excluding !tax', array('!tax' => variable_get('uc_vat_name', 'VAT'))) .':</strong> '. uc_price($subtotal - array_sum($tax_subtotals), $context),
+        '#cell_attributes' => array(
+          'colspan' => 'full',
+          'align' => 'right',
+          'class' => 'subtotal excl-vat',
+        ),
+      ),
+    );
+  }
+
+  foreach ($taxes as $id => $tax) {
+    if ($tax_subtotals[$id]) {
+      $tax_name = variable_get('uc_vat_hide_checkout_exclusive', FALSE) ? t('incl. !tax', array('!tax' => $tax->name)) : $tax->name;
+      $table[] = array(
+        'total' => array(
+          '#value' => '<strong>'. $tax_name .':</strong> '. uc_price($tax_subtotals[$id], $context),
+          '#cell_attributes' => array(
+            'colspan' => 'full',
+            'align' => 'right',
+            'class' => 'subtotal vat',
+          ),
+        ),
+      );
+    }
+  }
+
+  // Rebuild the original "subtotal" line.
+  $table[] = array(
+    'total' => array(
+      '#value' => '<strong>'. t('Subtotal') .':</strong> '. uc_price($subtotal, $context),
+      '#cell_attributes' => array(
+        'colspan' => 'full',
+        'align' => 'right',
+        'class' => 'subtotal',
+      ),
+    ),
+  );
+
+  // Add in extra rows that have no tax information available.
+  if ($extra_rows) {
+    $table = array_merge($table, $extra_rows);
+    foreach ($extra_rows as $row) {
+      $subtotal += $row['#total'];
+    }
+
+    $table[] = array(
+      'total' => array(
+        '#value' => '<strong>'. t('Total') .':</strong> '. uc_price($subtotal, $context),
+        '#cell_attributes' => array(
+          'colspan' => 'full',
+          'align' => 'right',
+          'class' => 'subtotal',
+        ),
+      ),
+    );
+  }
+}
+
+/**
+ * Implementation of hook_checkout_pane_alter().
+ */
+function uc_vat_checkout_pane_alter(&$panes) {
+  if (variable_get('uc_vat_show_cart_vat', FALSE) || variable_get('uc_vat_show_cart_columns', FALSE)) {
+    foreach ($panes as &$pane) {
+      if ($pane['id'] == 'cart') {
+        $pane['callback'] = 'uc_checkout_pane_cart_vat';
+      }
+    }
+  }
+}
+
+/**
+ * Checkout cart pane callback.
+ */
+function uc_checkout_pane_cart_vat($op, &$arg1, $arg2) {
+  switch ($op) {
+    case 'view':
+      drupal_add_js('misc/progress.js');
+      drupal_add_js(drupal_get_path('module', 'uc_vat') .'/uc_vat.js');
+      drupal_add_js(array(
+        'ucURL' => array(
+          'updateCartPane' => url('cart/checkout/cart_pane'),
+        ),
+      ), 'setting');
+
+      $contents['cart'] = array(
+        '#value' => '<div></div>',
+      );
+      if (uc_cart_is_shippable() && variable_get('uc_vat_suffix_shipping', FALSE)) {
+        $contents['cart']['#suffix'] = theme('uc_vat_excluding_shipping_costs', 'div');
+      }
+
+      return array('contents' => $contents, 'next-button' => FALSE);
+
+    case 'review':
+      $output = '<table>';
+      $context = array(
+        'revision' => 'themed',
+        'type' => 'order_product',
+        'subject' => array(),
+      );
+      foreach ($arg1->products as $item) {
+        $desc = check_plain($item->title) . uc_product_get_description($item);
+
+        $price_info = array(
+          'price' => $item->price,
+          'qty' => $item->qty,
+        );
+        $context['subject'] = array(
+          'order' => $arg1,
+          'product' => $item,
+          'node' => node_load($item->nid),
+        );
+        $output .= '<tr valign="top"><td>'. $item->qty .'&times;</td><td width="100%">'. $desc
+                  .'</td><td nowrap="nowrap">'. uc_price($price_info, $context) .'</td></tr>';
+      }
+      $output .= '</table>';
+      $review[] = $output;
+      return $review;
+  }
+}
+
+/**
+ * AJAX callback to update checkout cart pane.
+ */
+function uc_vat_update_cart_pane() {
+  $data = array();
+  if ($order = unserialize(rawurldecode($_POST['order']))) {
+    $data['cart'] = theme('uc_vat_cart_review_table', TRUE, $order);
+  }
+  drupal_json($data);
+}
+
+/**
+ * Return a formatted list of line items for an order total preview.
+ *
+ * @see uc_payment_get_totals()
+ */
+function uc_vat_uc_payment_get_totals() {
+  if (!variable_get('uc_vat_show_cart_columns', FALSE) || uc_vat_exclude_vat()) {
+    uc_payment_get_totals();
+    exit;
+  }
+ 
+  $order = unserialize($_POST['order']);
+  if (!$order) {
+    return '';
+  }
+
+  usort($order->line_items, 'uc_weight_sort');
+
+  $context = array(
+    'revision' => 'altered',
+    'subject' => array(
+      'order' => $order,
+    ),
+  );
+
+  $header = array(
+    array(
+      'data' => t('Price excl. !tax', array('!tax' => variable_get('uc_vat_name', 'VAT'))),
+      'style' => 'text-align:right;',
+      'colspan' => 2.
+    ),
+    array(
+      'data' => t('!tax', array('!tax' => variable_get('uc_vat_name', 'VAT'))),
+      'style' => 'text-align:right;',
+    ),
+    array(
+      'data' => t('Total'),
+      'style' => 'text-align:right;',
+    ),
+  );
+
+  $rows = array();
+  $total = 0;
+  $altered_total = 0;
+  $include_summary = FALSE;
+  foreach ($order->line_items as $line) {
+    if (!$line['summed'] || $line['type'] == 'tax') {
+      continue;
+    }
+
+    // Show a summary if this line item is non-negative and there was a previous discount line item.
+    if ($include_summary && $line['amount'] >= 0) {
+      $rows[] = array(array('data' => '<hr />', 'colspan' => 4));
+      $rows[] = $summary_row;
+    }
+
+    if ($line['type'] == 'subtotal') {
+      // Recalculate order subtotal, as the supplied value already includes VAT.
+      // (this is a bug in uc_order, but we can only work around it)
+      $context['type'] = 'order_product';
+      $line['amount'] = 0;
+      $altered = 0;
+      foreach ($order->products as $item) {
+        $context['subject']['product'] = $item;
+        $context['subject']['node'] = node_load($item->nid);
+        $price = uc_price($item->price * $item->qty, $context);
+
+        $line['amount'] += $item->price * $item->qty;
+        $altered += $price;
+      }
+    }
+    else {
+      $context['type'] = 'line_item';
+      $context['subject']['line_item'] = $line;
+      $altered = uc_price($line['amount'], $context);
+    }
+
+    $rows[] = array(
+      array('data' => '<b>' . check_plain($line['title']) . ':</b>', 'align' => 'right'),
+      array('data' => uc_currency_format($line['amount']), 'align' => 'right'),
+      array('data' => uc_currency_format($altered - $line['amount']), 'align' => 'right'),
+      array('data' => uc_currency_format($altered), 'align' => 'right'),
+    );
+
+    $total += $line['amount'];
+    $altered_total += $altered;
+
+    // If this line item is a discount, remember it to use as a summary, if there is another
+    // non-negative item below.
+    if ($line['amount'] < 0) {
+      $summary_row = array(
+        array('data' => uc_currency_format($total), 'align' => 'right', 'colspan' => 2),
+        array('data' => uc_currency_format($altered_total - $total), 'align' => 'right'),
+        array('data' => uc_currency_format($altered_total), 'align' => 'right'),
+      );
+      $include_summary = TRUE;
+    }
+    else {
+      $include_summary = FALSE;
+    }
+  }
+
+  $rows[] = array(
+    array('data' => '<b>' . t('Order total:') . '</b>', 'align' => 'right'),
+    array('data' => uc_currency_format($total), 'align' => 'right'),
+    array('data' => uc_currency_format($altered_total - $total), 'align' => 'right'),
+    array('data' => uc_currency_format($altered_total), 'align' => 'right'),
+  );
+
+  $output = theme('table', $header, $rows);
+
+  // Ugly hack to remove zebra stripes from the table.
+  $output = str_replace(array('class="odd"', 'class="even"'), '', $output);
+
+  print t('Order total preview:') .' <span id="order-total-throbber"></span>';
+  print $output;
+  exit;
+}
+
+/**
+ * "Show prices excluding VAT" permission helper function.
+ */
+function uc_vat_exclude_vat() {
+  global $user;
+  return $user->uid == 1 ? variable_get('uc_vat_exclude_superuser', FALSE) : user_access('show prices excluding VAT');
+}
+
+/**
+ * Helper function to determine which product fields should be edited VAT inclusive.
+ */
+function _uc_vat_product_fields() {
+  $fields = array(
+    'list_price' => variable_get('uc_vat_list_price_inclusive', FALSE),
+    'cost' => variable_get('uc_vat_cost_inclusive', FALSE),
+    'sell_price' => variable_get('uc_vat_sell_price_inclusive', FALSE),
+  );
+  return array_keys(array_filter($fields));
+}
+
+/**
+ * Helper function to determine which attribute fields should be edited VAT inclusive.
+ */
+function _uc_vat_attribute_fields() {
+  $fields = array(
+    'cost' => variable_get('uc_vat_cost_inclusive', FALSE),
+    'price' => variable_get('uc_vat_sell_price_inclusive', FALSE),
+  );
+  return array_keys(array_filter($fields));
+}
+
+/**
+ * Implementation of hook_views_api().
+ */
+function uc_vat_views_api() {
+  return array(
+    'api' => '2.0',
+  );
+}
+
+/**
+ * Implementation of hook_views_data_alter().
+ */
+function uc_vat_views_data_alter(&$data) {
+  foreach (array('list_price', 'cost', 'sell_price') as $field) {
+    $data['uc_products'][$field]['field']['handler'] = 'uc_vat_handler_field_price';
+  }
+}
+
+/**
+ * Implementation of hook_views_handlers().
+ */
+function uc_vat_views_handlers() {
+  return array(
+    'handlers' => array(
+      'uc_vat_handler_field_price' => array(
+        'parent' => 'uc_product_handler_field_price',
+      ),
+    ),
+  );
+}

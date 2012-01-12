@@ -1,0 +1,207 @@
+<?php
+/**
+ * @file menu_parent.module
+ * TODO: Enter file description here.
+ */
+
+/**
+ * Implementation of hook_form_alter
+ */
+function menu_parent_form_alter(&$form, &$form_state, $form_id) {
+  if ($form_id == 'block_admin_configure'):
+    if ($form['module']['#value'] == 'menu'):
+      $delta = $form['delta']['#value'];
+      
+      // lookup menu visibility settings
+      $results = db_query("SELECT * FROM {menu_parent_blocks_menus} WHERE delta = '%s'", $delta);
+      $default_value = NULL;
+      
+      while($result = db_fetch_array($results)) {
+        $default_value[$result['visible_menu']] = $result['visible_menu'];
+      }
+      
+      $form['menu_vis_settings'] = array(
+        '#type' => 'fieldset',
+        '#title' => t('Menu specific visability settings'),
+        '#collapsible' => TRUE,
+        '#weight' => 0
+      );
+      $menus = menu_parent_get_menus();
+            
+      $form['menu_vis_settings']['menus'] = array(
+          '#type' => 'checkboxes',
+          '#options' => $menus,
+          '#default_value' => $default_value,
+        );
+      // Since there is no api for dealing with blocks similiar to hook_node_api,
+      // we generate a pre-filled snippet of php that checks the menu settings. 
+      $form['page_vis_settings']['visibility']['#default_value'] = 2;
+      $form['page_vis_settings']['pages']['#default_value'] = '<?php if (function_exists(menu_parent_is_block_visible)) { return menu_parent_is_block_visible($_GET[\'q\'], \''. $delta .'\'); } ?>';
+      $form['#submit'][] = 'menu_parent_save_block';
+    endif;
+  endif;
+}
+
+function menu_parent_is_block_visible($q, $delta) {
+  $q = check_plain($q);
+  $delta = check_plain($delta);
+  $visible = FALSE;
+  $sql = "SELECT case count(*)  when 0 then 0	else 1 end FROM menu_links l, menu_parent_blocks_menus m WHERE l.link_path = '%s' and visible_menu = l.menu_name and m.delta = '%s'";
+  $result = db_result(db_query($sql, $q, $delta));
+  $visible = $result;
+  
+  
+  return $visible;
+}
+
+function menu_parent_save_block($form, $form_state) {
+    $menu_settings = array();
+  $substr = "";
+  $delta = $form_state['values']['delta'];
+  foreach($form_state['values']['menus'] as $key=>$val) {
+    
+    if ($val!='0') {
+    
+
+      $menu_settings[] = $form_state['values']['module'];
+      $menu_settings[] = $delta;
+      $menu_settings[] = $val;
+      $substr = $substr . "('%s', '%s', '%s'), ";
+    }
+  }
+  $substr = substr($substr, 0, -2);
+  if (count($menu_settings)> 0) {
+ 
+    // clear settings for this block
+    db_query("DELETE FROM {menu_parent_blocks_menus} WHERE delta = '%s'", $delta);
+    
+    // add new settings
+    db_query("INSERT INTO {menu_parent_blocks_menus} (module, delta, visible_menu) VALUES ". $substr, $menu_settings);
+  }
+}
+
+
+
+/**
+ * Implementation of hook_menu().
+ */
+function menu_parent_menu() { 
+  
+  $items['admin/settings/menu_parent'] = array(
+      'title' => 'Menu Parent settings',
+      'description' => 'Allows menus to be designated as children of other menus.',
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('menu_parent_admin_settings'),
+      'access arguments' => array('administer site configuration'),
+      'menu_name' => 'menu_parent',
+  );
+  return $items;
+}
+
+function menu_parent_get_menus() {
+  $menus = array();
+  $results =  db_query("SELECT menu_name, title FROM {menu_custom}");
+  while ($result = db_fetch_array($results)) {
+    $menus[$result['menu_name']] = $result['title'];
+  }
+  return $menus;
+}
+
+function menu_parent_admin_settings() {
+  $menus = menu_parent_get_menus();
+  $pairs = menu_parent_get_pairs();
+
+  $form = array();  
+  $form['menus'] = array();
+  $form['help'] = array(
+    '#type' => 'item',
+    '#value' => '<p>'. t('For each item, you can select an optional parent. When selected, the lowest weighted item of the child menu will now appear in the parent menu.') .'</p>',
+    '#weight' => -10
+  );
+    
+  foreach ($menus as $key=>$val) {
+    $ops = array('none'=>'None');
+    $ops = array_merge($ops, $menus);
+    unset($ops[$key]);
+    $default_value = NULL;
+    
+    if (array_key_exists($key, $pairs)){
+      $default_value = $pairs[$key];
+    }
+    
+    $form['menus'][$key] = array(
+      '#title' => $val,
+      '#type' => 'select',
+      '#options' => $ops,
+      '#default_value' => $default_value,
+      '#description' => t('Please select which menu should be the parent'),
+    );
+  }
+  
+  $form['#submit'] = array('menu_parent_save');
+  
+  return system_settings_form($form);
+}
+
+function menu_parent_save($form, $form_state) {
+  
+  $delete = db_query("DELETE FROM {menu_parent}");
+  $result = db_query("SELECT * FROM {menu_parent_links}");
+  $mlids = array();
+  $strrepl = "";
+  while($mlid = db_fetch_array($result)){
+   menu_link_delete($mlid['mlid']);   
+  }
+  
+  db_query("DELETE FROM {menu_parent_links}");
+
+  if($form_state['clicked_button']['#value'] != 'Reset to defaults') {
+    $menus = menu_parent_get_menus();
+    $xref = array();
+    $strrepl = "";
+    foreach($form_state['values'] as $key=>$val) {
+      if ( array_key_exists($val, $menus)) {
+        $xref[] = $val;
+        $xref[] = $key;
+        $strrepl = $strrepl ."('%s', '%s'), ";
+      }
+    }
+    
+    $strrepl = substr($strrepl, 0, -2);
+    if (count($xref) > 0 )  {
+      db_query("INSERT INTO  {menu_parent} (menu_name, ch_menu_name) VALUES ". $strrepl, $xref);
+    }
+  }
+  
+  $pairs = menu_parent_get_pairs();
+  if (count($pairs>0)) {
+    foreach($pairs as $child=>$parent){
+      $child_first_item = db_query("SELECT * FROM {menu_links} WHERE menu_name = '%s' ORDER BY weight ASC LIMIT 1", $child);
+      while($first_item = db_fetch_array($child_first_item)) {
+        $title = db_result(db_query("SELECT title FROM {menu_custom} WHERE menu_name = '%s' LIMIT 1", $child));
+        //dsm($title);
+        $item = array(
+          'menu_name' => $parent,
+          'link_path' => $first_item['link_path'],
+          'link_title' => $title,
+          'module' => 'menu_parent',
+        );
+
+        $mlid = menu_link_save($item);
+        db_query("INSERT INTO {menu_parent_links} (mlid) VALUES (%d)", $mlid);
+        
+      }
+    }
+  }
+  menu_rebuild();  
+}
+
+function menu_parent_get_pairs() {
+  $results = db_query("SELECT * FROM {menu_parent}");
+  $pairs = array();
+  while($result = db_fetch_array($results)) {
+    $pairs[$result['ch_menu_name']] = $result['menu_name'];
+  }
+  
+  return $pairs;
+}

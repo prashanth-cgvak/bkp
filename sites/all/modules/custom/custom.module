@@ -1,0 +1,18 @@
+<?php
+
+function custom_views_query_alter(&$view, &$query) {
+  if ($view->name == 'Products' && ($view->current_display=="page_1" 
+          || $view->current_display=="page_2")){
+  if(arg(3)=="asc")
+   $query->orderby[0]='uc_products_sell_price ASC';
+   if(arg(3)=="desc")
+   $query->orderby[0]='uc_products_sell_price DESC';
+  } 
+  
+//  if ($view->name == 'pricelist' ){
+//  if(arg(1)=="asc")
+//   $query->orderby[0]='uc_products_sell_price ASC';
+//   if(arg(1)=="desc")
+//   $query->orderby[0]='uc_products_sell_price DESC';
+//  } 
+}

@@ -1,0 +1,12 @@
+Administration Menu select 6.x-1.1 (2012-04-13)
+--------------------------------------------------------------------------------
+
+- #1125012 by Dave Reid, deciphered: Added support for Toolbar module.
+- #1125012 by Dave Reid, deciphered: Rewrote core functionality and API.
+- Added API documentation.
+
+
+Administration Menu select 6.x-1.0 (2012-04-12)
+--------------------------------------------------------------------------------
+
+- Initial release.

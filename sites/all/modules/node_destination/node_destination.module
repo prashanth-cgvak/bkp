@@ -1,0 +1,60 @@
+<?php
+
+/**
+ * @file
+ * Allows the auto redirection of node add/edit forms to specified addresses, on a per content type basis.
+ */
+
+
+/**
+ * Implementation of hook_form_alter().
+ */
+function node_destination_form_alter(&$form, $form_state, $form_id) {
+  
+  if (isset($form['#node_type']) && 'node_type_form' == $form_id) {
+    node_destination_node_settings_form($form);
+  }
+  elseif (isset($form['#node']) && isset($form['#method']) && $form['#node']->type .'_node_form' == $form_id) {
+    
+    $option = node_destination_get_setting($form['#node']->type);
+		
+		if ($option) {
+			$form['#redirect'] = $option;
+		}
+  }
+}
+
+
+/**
+ * Returns the node_destination setting depending on the content type paramatar.
+ */
+function node_destination_get_setting($type) {
+  return variable_get('ndest_'. $type, false);
+}
+
+
+/**
+ * Implementation of node_settings_form().
+ */
+function node_destination_node_settings_form(&$form) {
+  
+  $form['node_destination'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Node Destination'),
+    '#weight' => 2,
+    '#collapsible' => TRUE,
+    '#collapsed' => FALSE,
+  );
+  
+  $form['node_destination']['ndest'] = array(
+		'#title' => 'Path to destination',
+	 	'#description' => 'Specify the path a user should be sent to, after adding or editing a node. Simple leave blank to use Drupal\'s default behaviour.',
+   	'#type' => 'textfield',
+   	'#default_value' => node_destination_get_setting($form['#node_type']->type),
+  );
+
+}
+
+
+
+

@@ -1,0 +1,10 @@
+core = "6.x"
+description = "Allows users to choose which Administration menu module to use."
+name = "Administration Menu select"
+
+; Information added by drupal.org packaging script on 2011-04-13
+version = "6.x-1.1"
+core = "6.x"
+project = "admin_select"
+datestamp = "1302677215"
+

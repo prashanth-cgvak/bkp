@@ -1,0 +1,7 @@
+; $Id $
+name = custom
+description = For liquorish.
+core = 6.x
+
+
+

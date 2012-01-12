@@ -1,0 +1,221 @@
+<?php
+function uc_gift_certificate_schema() {
+  $schema = array();
+
+  $schema ['uc_gift_certificates'] = array(
+    'description' => t('The list of gift certificates purchased by users.'),
+    'fields' => array(
+      'certificate_id' => array(
+        'description' => t('The certificate id.'),
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'name' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'original_value' => array(
+        'description' => t('The original gift certificate amount.'),
+        'type' => 'numeric',
+        'precision' => 15,
+        'scale' => 3,
+        'not null' => TRUE,
+        'default' => 0.0,
+      ),
+      'remaining_value' => array(
+        'description' => t('The amount remaining.'),
+        'type' => 'numeric',
+        'precision' => 15,
+        'scale' => 3,
+        'not null' => TRUE,
+        'default' => 0.0,
+      ),
+      'user_id' => array(
+        'description' => t('The identifier of the user that has the certificate.'),
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'order_id' => array(
+        'description' => t('The identifier of the order in which the certificate was purchased.'),
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'purchaser_id' => array(
+        'description' => t('The identifier of the user who purchased the certificate.'),
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'cert_code' => array(
+        'description' => t('Internally used to generate a certificate code.'),
+        'type' => 'varchar',
+        'length' => 100,
+        'default' => NULL,
+      ),
+      'order_product_id' => array(
+        'description' => t('The identifier of the product in the order.'),
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'created_on' => array(
+        'description' => 'The Unix timestamp indicating when the gift cert was created.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+    ),
+    'indexes' => array(
+      'original_value' => array('original_value'),
+      'remaining_value' => array('remaining_value'),
+      'purchaser_id' => array('purchaser_id'),
+      'order_id' => array('order_id'),
+    ),
+    'primary key' => array('certificate_id'),
+  );
+
+  return $schema;
+}
+
+function uc_gift_certificate_install() {
+  drupal_install_schema('uc_gift_certificate');
+  foreach (array('uc_gift_certificate_email_aid' => 'Recipient\'s Email Address', 'uc_gift_certificate_message_aid' => 'Message To Recipient') as $var => $name) {
+    $attrib = new stdClass();
+    $attrib->name = $name;
+    $attrib->label = $name;
+    $attrib->required = ($var == 'uc_gift_certificate_email_aid');
+    $attrib->display = 0;
+    drupal_write_record('uc_attributes', $attrib);
+    variable_set($var, $attrib->aid);
+  }
+}
+
+function uc_gift_certificate_uninstall() {
+  drupal_uninstall_schema('uc_gift_certificate');
+  variable_del('uc_gift_certificate_order_status_issue');
+  variable_del('uc_gift_certificate_order_status_deduct');
+  variable_del('uc_gift_certificate_message_aid');
+  variable_del('uc_gift_certificate_email_aid');
+  variable_del('uc_gc_email_new_user_subject');
+  variable_del('uc_use_autocomplete_user_fields');
+  variable_del('uc_gc_pane_msg');
+  variable_del('uc_gc_email_body');
+  variable_del('uc_gc_email_subject');
+  variable_del('uc_gc_email_new_user_body');
+  variable_del('uc_gc_email_new_user_subject');
+}
+
+/**
+ * #468706, Make titles more descriptive
+ */
+function uc_gift_certificate_update_6001() {
+  $ret = array();
+  db_change_field($ret, 'uc_gift_certificates', 'name', 'name', array('type' => 'varchar', 'length' => 255, 'not null' => TRUE, 'default' => ''));
+  return $ret;
+}
+
+/**
+ * #473488, Removing Certificate Amount attribute
+ */
+function uc_gift_certificate_update_6002() {
+  $ret = array();
+  db_query("DELETE FROM {uc_attributes} WHERE uc_attributes.name = 'Certificate Amount'");
+  return $ret;
+}
+/**
+ * #528574, Making recipient email address required
+ */
+function uc_gift_certificate_update_6003() {
+  $ret = array();
+  db_query("UPDATE {uc_attributes} SET required=1 WHERE name LIKE 'Recipient''s Email Address'");
+  return $ret;
+}
+
+/**
+ * #677802, Allow the order status to be different for crediting vs deducting a certificate
+ */
+function uc_gift_certificate_update_6004() {
+  variable_set('uc_gift_certificate_order_status_issue', variable_get('uc_gift_certificate_order_status', uc_gift_certificate_get_setting_defaults('uc_gift_certificate_order_status_issue')));
+  variable_set('uc_gift_certificate_order_status_deduct', variable_get('uc_gift_certificate_order_status', uc_gift_certificate_get_setting_defaults('uc_gift_certificate_order_status_deduct')));
+  variable_del('uc_gift_certificate_order_status');
+  $ret = array();
+  return $ret;
+}
+
+/**
+ * #805954, Use theme system and tokens for gift cert emails
+ */
+function uc_gift_certificate_update_6005() {
+  $ret = array();
+  variable_del('uc_gc_email_format');
+  // Update subject to use tokens
+  foreach (array('uc_gc_email_subject', 'uc_gc_email_new_user_subject') as $var) {
+    $val = variable_get($var, '');
+    if (!empty($var)) {
+      $val = str_replace(array('!site', '!gift_certificate_value', '!gift_certificate_code'),
+                         array('[store-name]', '[gift-cert-value]', '[gift-cert-code]'),
+                         $val);
+      variable_set($var, $val);
+    }
+  }
+  $ret[] = array('success' => TRUE, 'query' => 'Updated UC Gift Certificate email subjects to use tokens.');
+
+  // Now try and detect if they customized the certificate email
+  $orig_new_body = "Good news! \r\n\r\nYou have just received a gift certificate for !gift_certificate_value to be used on your next purchase at !site. \r\n\r\nA personal message:\r\n!gift_certificate_message\r\n\r\nAn account has been created for you at !site and you may now log in to !login_uri using the following username and password:\r\n\r\nusername: !username\r\npassword: !password\r\n\r\nYou may also log in by clicking on this link or copying and pasting it in your browser:\r\n\r\n!login_url\r\n\r\nThis is a one-time login, so it can be used only once. After logging in, you will be redirected to !edit_uri so you can change your password.\r\n\r\nHappy shopping!";
+  $new_body = variable_get('uc_gc_email_new_user_body', '');
+  $orig_body = "Good news! \r\n\r\nYou have just received a gift certificate for !gift_certificate_value to be used on your next purchase at !site. \r\n\r\nA personal message:\r\n!gift_certificate_message\r\n\r\n\r\nHappy shopping!";
+  $body = variable_get('uc_gc_email_new_user_body', '');
+  if ((!empty($body) && $body != $orig_body) || (!empty($new_body) && $new_body != $orig_new_body)) {
+    $ret[] = array('success' => FALSE, 'query' => t('UC Gift Certificate emails now use the template system.  You must re-implement the customizations to your UC Gift Certificate emails by copying uc_gift_certificate.tpl.php to your theme directory.  For reference, your old message body for new users is (var uc_gc_email_new_user_body): <pre>@new_body</pre> and for existing users (var uc_gc_email_body): <pre>@body</pre>', array('@new_body' => $new_body, '@body' => $body)));
+  }
+
+  return $ret;
+}
+
+/**
+ * #999222, Store attributes by id instead of hardcoding titles
+ */
+function uc_gift_certificate_update_6006() {
+  $ret = array();
+  foreach (array('uc_gift_certificate_email_aid' => 'Recipient\'s Email Address', 'uc_gift_certificate_message_aid' => 'Message To Recipient') as $var => $name) {
+    $aid = db_result(db_query('SELECT aid FROM {uc_attributes} WHERE name = "%s"', $name));
+    if (!$aid) {
+      $ret[] = array('success' => FALSE, 'query' => t('Could not find "@name" attribute.', array('@name' => $name)));
+    }
+    else {
+      variable_set($var, $aid);
+    }
+  }
+}
+
+/**
+ * #1009032, Improve admin list by adding created_on, original_value, and remaining_value
+ */
+function uc_gift_certificate_update_6007() {
+  $schema = uc_gift_certificate_schema();
+  $ret = array();
+  db_change_field($ret, 'uc_gift_certificates', 'value', 'remaining_value', $schema['uc_gift_certificates']['fields']['remaining_value']);
+  db_add_field($ret, 'uc_gift_certificates', 'original_value', $schema['uc_gift_certificates']['fields']['original_value']);
+  db_add_field($ret, 'uc_gift_certificates', 'created_on', $schema['uc_gift_certificates']['fields']['created_on']);
+  db_add_index($ret, 'uc_gift_certificates', 'original_value', array('original_value'));
+  db_add_index($ret, 'uc_gift_certificates', 'remaining_value', array('remaining_value'));
+  db_add_index($ret, 'uc_gift_certificates', 'purchaser_id', array('purchaser_id'));
+  db_add_index($ret, 'uc_gift_certificates', 'order_id', array('order_id'));
+
+  // Try to fill in created_on based off order number
+  $ret[] = update_sql('UPDATE {uc_gift_certificates} ugc SET created_on = (SELECT created FROM {uc_orders} uo WHERE uo.order_id = ugc.order_id)');
+
+  // Try to fill in original_value based off order product id
+  $ret[] = update_sql('UPDATE {uc_gift_certificates} ugc SET original_value = remaining_value');
+  $ret[] = update_sql('UPDATE {uc_gift_certificates} ugc SET original_value = (SELECT price FROM {uc_order_products} uop WHERE uop.order_product_id = ugc.order_product_id)');
+  return $ret;
+}

@@ -1,0 +1,59 @@
+<?php
+// $Id: uc_gift_order.install,v 1.1.2.1 2009/06/17 22:49:03 jrust Exp $
+
+/**
+ * Implementation of hook_schema().
+ */
+function uc_gift_order_schema() {
+  $schema['uc_gift_orders'] = array(
+    'description' => t('Determines if an Ubercart order was purchased as a gift.'),
+    'fields' => array(
+      'gift_id' => array(
+        'description' => t('The row id.'),
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'order_id' => array(
+        'description' => t('The identifier of the order.'),
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'gift_mark' => array(
+        'description' => t('Is this a Gift?'),
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'gift_message' => array(
+        'description' => t('A short message for the recipient of the gift.'),
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+    ),
+    'indexes' => array(
+      'order_id' => array('order_id'),
+    ),
+    'primary key' => array('gift_id'),
+  );
+
+  return $schema;
+}
+
+/**
+ * Implementation of hook_install().
+ */
+function uc_gift_order_install() {
+  // Create tables.
+  drupal_install_schema('uc_gift_order');
+}
+
+function uc_gift_order_uninstall() {
+  // Remove tables.
+  drupal_uninstall_schema('uc_gift_order');
+}

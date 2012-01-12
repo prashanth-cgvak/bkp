@@ -1,0 +1,31 @@
+; $Id: redcherry.info, 2011/08/27 02:22:00 goba Exp $
+name = BKP Jewels
+description = Drupal Template developed by prashanth pratapagiri email: apple.php@gmail.com.
+version = VERSION
+core = 6.x
+engine = phptemplate
+stylesheets[all][] = css/bkp.css
+stylesheets[all][] = css/superfish.css
+stylesheets[all][] = css/drupal.css
+stylesheets[all][] = css/style.css
+;stylesheets[all][] = css/menu.css
+stylesheets[all][] = css/slider.css
+;base theme = garland
+regions[primary_menu] = Primary Menu
+regions[content_blocks] = Content Blocks
+regions[search_block] = Search
+regions[ajax_cart] = Ajax Cart
+regions[news_letter] = News Letter
+regions[footer_personal] = Footer Personal
+regions[footer_socail] = Footer social
+regions[footer_pages] = Footer Pages
+regions[message_box] = Message Box
+regions[related_products] = Related products
+scripts[] = scripts/hoverIntent.js
+scripts[] = scripts/superfish.js
+scripts[] = scripts/jquery-placeholder.js
+
+
+
+
+

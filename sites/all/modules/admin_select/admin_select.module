@@ -1,0 +1,112 @@
+<?php
+/**
+ * @file
+ * Core functionality for Administration Menu select module.
+ */
+
+/**
+ * Include additional files.
+ */
+foreach (module_list() as $module) {
+  if (file_exists($file = dirname(__FILE__) . "/includes/{$module}.inc")) {
+    require_once $file;
+  }
+}
+
+/**
+ * Implements hook_init().
+ */
+function admin_select_init() {
+  $data = unserialize($GLOBALS['user']->data);
+  if (isset($data['admin_select'])) {
+    $current = $data['admin_select'];
+    $info = admin_select_get_admin_select_info();
+    foreach ($info as $key => $item) {
+      if ($key != $current) {
+        admin_select_suppress($item);
+      }
+    }
+  }
+}
+
+function admin_select_get_admin_select_info($check_access = TRUE) {
+  $info = module_invoke_all('admin_select_info');
+  drupal_alter('admin_select_info', $info);
+
+  if ($check_access) {
+    $info = array_map('_admin_select_check_access', $info);
+  }
+
+  return $info;
+}
+
+/**
+ * Implements hook_user().
+ */
+function admin_select_user($op, &$edit, &$account, $category = NULL) {
+  if ($op == 'form' && $category == 'account') {
+    $form = array();
+    $data = unserialize($edit['data']);
+    $info = admin_select_get_admin_select_info();
+    $options = array();
+    foreach ($info as $key => $item) {
+      if (!empty($item['access'])) {
+        $options[$key] = $item['title'];
+      }
+    }
+    asort($options);
+    $form['admin_select'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Administration Menu select settings'),
+      '#collapsible' => TRUE,
+      '#weight' => 10,
+      '#access' => !empty($options),
+    );
+    $form['admin_select']['admin_select'] = array(
+      '#type' => 'select',
+      '#options' => array('' => t('None')) + $options,
+      '#default_value' => isset($data['admin_select']) ? $data['admin_select'] : '',
+    );
+    return $form;
+  }
+}
+
+/**
+ * Suppress and admin item.
+ */
+function admin_select_suppress($item) {
+  if (!empty($item['include'])) {
+    include_once $item['include'];
+  }
+
+  if (!empty($item['suppress callback']) && function_exists($item['suppress callback'])) {
+    $item['suppress callback']();
+  }
+}
+
+/**
+ * Check to see if the current user has access to an admin item.
+ */
+function _admin_select_check_access(&$item) {
+  // Determine access callback, which will decide whether or not the current
+  // user has access to this path.
+  $item += array('access callback' => 'user_access');
+  $callback = empty($item['access callback']) ? FALSE : trim($item['access callback']);
+  // Check for a TRUE or FALSE value.
+  if (is_bool($callback)) {
+    $item['access'] = $callback;
+  }
+  else {
+    $arguments = isset($item['access arguments']) ? $item['access arguments'] : array();
+    // As call_user_func_array is quite slow and user_access is a very common
+    // callback, it is worth making a special case for it.
+    if ($callback == 'user_access') {
+      $item['access'] = (count($arguments) == 1) ? user_access($arguments[0]) : user_access($arguments[0], $arguments[1]);
+    }
+    elseif (function_exists($callback)) {
+      $item['access'] = call_user_func_array($callback, $arguments);
+    }
+  }
+
+  return $item;
+}
